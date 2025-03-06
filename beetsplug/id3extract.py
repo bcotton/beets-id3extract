@@ -33,28 +33,58 @@ class ID3ExtractPlugin(BeetsPlugin):
     def __init__(self):
         super(ID3ExtractPlugin, self).__init__()
         # Get mappings from config
-        self.mappings = self.config.get('mappings', {}).items()
+        try:
+            config_mappings = dict(self.config['mappings'])
+            self._log.debug('Loaded mappings: {}', dict(config_mappings))
+        except:
+            self._log.warning('No mappings found in config, using empty mapping')
+            config_mappings = {}
+            
+        if not isinstance(config_mappings, dict):
+            self._log.warning('Invalid mappings configuration. Expected a dictionary, got {}', type(config_mappings))
+            config_mappings = {}
+        self.mappings = config_mappings.items()
+        self._log.debug('Loaded mappings: {}', dict(self.mappings))
         
         # Register fields for each mapping
         for id3_tag, beets_field in self.mappings:
+            self._log.debug('Registering field mapping: {} -> {}', id3_tag, beets_field)
             self.add_media_field(id3_tag.lower(), CustomID3Field(id3_tag))
         
         # Register listeners
         self.register_listener('item_imported', self.item_imported)
         self.register_listener('item_written', self.item_written)
 
+        self._log.debug('ID3ExtractPlugin initialized')
+
     def item_imported(self, item, path):
         """When an item is imported, read ID3 tags and set corresponding beets fields."""
+        self._log.debug('Processing imported item: {}', path)
         mediafile = MediaFile(path)
         for id3_tag, beets_field in self.mappings:
-            if hasattr(mediafile, id3_tag.lower()) and getattr(mediafile, id3_tag.lower()):
-                setattr(item, beets_field, getattr(mediafile, id3_tag.lower()))
+            if hasattr(mediafile, id3_tag.lower()):
+                value = getattr(mediafile, id3_tag.lower())
+                if value:
+                    self._log.debug('Found {} tag: {}', id3_tag, value)
+                    setattr(item, beets_field, value)
+                else:
+                    self._log.debug('{} tag exists but is empty', id3_tag)
+            else:
+                self._log.debug('No {} tag found', id3_tag)
         item.store()
 
     def item_written(self, item, path):
         """When an item is written, update ID3 tags with corresponding beets fields."""
+        self._log.debug('Processing written item: {}', path)
         mediafile = MediaFile(path)
         for id3_tag, beets_field in self.mappings:
-            if hasattr(item, beets_field) and getattr(item, beets_field):
-                setattr(mediafile, id3_tag.lower(), getattr(item, beets_field))
+            if hasattr(item, beets_field):
+                value = getattr(item, beets_field)
+                if value:
+                    self._log.debug('Writing {} to {} tag: {}', beets_field, id3_tag, value)
+                    setattr(mediafile, id3_tag.lower(), value)
+                else:
+                    self._log.debug('{} field exists but is empty', beets_field)
+            else:
+                self._log.debug('No {} field found', beets_field)
         mediafile.save() 
