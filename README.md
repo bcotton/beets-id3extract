@@ -10,6 +10,14 @@ A [beets](https://beets.io) plugin that maps arbitrary ID3 tags to beets custom 
 
 ## Installation
 
+### Using pip (recommended)
+
+```bash
+pip install beets-id3extract
+```
+
+### Manual Installation
+
 1. Clone this repository or copy `id3extract.py` to your beets plugin directory:
 ```bash
 cp id3extract.py ~/.config/beets/beetsplug/
@@ -85,6 +93,20 @@ This will show:
 - mediafile
 - mutagen (for ID3 tag handling)
 
+## Development
+
+To set up a development environment:
+
+```bash
+git clone https://github.com/your-username/beets-id3extract.git
+cd beets-id3extract
+pip install -e .
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
