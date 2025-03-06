@@ -19,12 +19,23 @@ Configuration:
 from beets.plugins import BeetsPlugin
 from mediafile import MediaFile, MediaField, MP3DescStorageStyle, MP3StorageStyle, MP4StorageStyle, StorageStyle
 
+class MP3URLStorageStyle(MP3StorageStyle):
+    """Storage for ID3 URL frames (like WOAS)."""
+    def get(self, mutagen_file):
+        try:
+            return mutagen_file[self.key].url
+        except (KeyError, AttributeError):
+            return None
+
+    def set(self, mutagen_file, value):
+        from mutagen.id3 import WOAS
+        mutagen_file[self.key] = WOAS(encoding=3, url=value)
+
 class CustomID3Field(MediaField):
     """A field for a custom ID3 tag."""
     def __init__(self, tag_name):
         super(CustomID3Field, self).__init__(
-            MP3DescStorageStyle(tag_name),
-            MP3StorageStyle(tag_name),
+            MP3URLStorageStyle(tag_name),
             MP4StorageStyle(f'----:com.apple.iTunes:{tag_name}'),
             StorageStyle(tag_name)
         )
@@ -34,8 +45,10 @@ class ID3ExtractPlugin(BeetsPlugin):
         super(ID3ExtractPlugin, self).__init__()
         # Get mappings from config
         try:
-            config_mappings = dict(self.config['mappings'])
-            self._log.debug('Loaded mappings: {}', dict(config_mappings))
+            raw_mappings = dict(self.config['mappings'])
+            # Convert config values to strings
+            config_mappings = {str(k): str(v) for k, v in raw_mappings.items()}
+            self._log.debug('Loaded mappings: {}', config_mappings)
         except:
             self._log.warning('No mappings found in config, using empty mapping')
             config_mappings = {}
@@ -43,8 +56,8 @@ class ID3ExtractPlugin(BeetsPlugin):
         if not isinstance(config_mappings, dict):
             self._log.warning('Invalid mappings configuration. Expected a dictionary, got {}', type(config_mappings))
             config_mappings = {}
-        self.mappings = config_mappings.items()
-        self._log.debug('Loaded mappings: {}', dict(self.mappings))
+        self.mappings = list(config_mappings.items())
+        self._log.debug('Processed mappings: {}', self.mappings)
         
         # Register fields for each mapping
         for id3_tag, beets_field in self.mappings:
@@ -52,19 +65,26 @@ class ID3ExtractPlugin(BeetsPlugin):
             self.add_media_field(id3_tag.lower(), CustomID3Field(id3_tag))
         
         # Register listeners
-        self.register_listener('item_imported', self.item_imported)
-        self.register_listener('item_written', self.item_written)
+        self.register_listener('item_imported', self.item_imported)  # For singleton imports
+        self.register_listener('album_imported', self.album_imported)  # For album imports
+        self.register_listener('write', self.on_write)
 
         self._log.debug('ID3ExtractPlugin initialized')
 
-    def item_imported(self, item, path):
-        """When an item is imported, read ID3 tags and set corresponding beets fields."""
-        self._log.debug('Processing imported item: {}', path)
-        mediafile = MediaFile(path)
+    def process_item(self, item):
+        """Process a single item, reading ID3 tags and setting beets fields."""
+        self._log.debug('Processing item: {}', item.path)
+        mediafile = MediaFile(item.path)
         for id3_tag, beets_field in self.mappings:
             if hasattr(mediafile, id3_tag.lower()):
                 value = getattr(mediafile, id3_tag.lower())
                 if value:
+                    # Handle Spotify URLs in WOAS field
+                    if id3_tag == 'WOAS' and value.startswith('https://open.spotify.com/track/'):
+                        spotify_id = value.split('/')[-1].split('?')[0]  # Handle potential query params
+                        self._log.debug('Extracted Spotify ID from WOAS: {}', spotify_id)
+                        value = spotify_id
+                    
                     self._log.debug('Found {} tag: {}', id3_tag, value)
                     setattr(item, beets_field, value)
                 else:
@@ -73,18 +93,27 @@ class ID3ExtractPlugin(BeetsPlugin):
                 self._log.debug('No {} tag found', id3_tag)
         item.store()
 
-    def item_written(self, item, path):
-        """When an item is written, update ID3 tags with corresponding beets fields."""
-        self._log.debug('Processing written item: {}', path)
-        mediafile = MediaFile(path)
+    def item_imported(self, lib, item):
+        """When a singleton item is imported."""
+        self._log.debug('Processing singleton import: {}', item.path)
+        self.process_item(item)
+
+    def album_imported(self, lib, album):
+        """When an album is imported, process all its items."""
+        self._log.debug('Processing album import: {}', album.album)
+        for item in album.items():
+            self.process_item(item)
+
+    def on_write(self, item, path, tags):
+        """When an item is about to be written, update the tags dictionary with our custom fields."""
+        self._log.debug('Processing write event for: {}', path)
         for id3_tag, beets_field in self.mappings:
             if hasattr(item, beets_field):
                 value = getattr(item, beets_field)
                 if value:
-                    self._log.debug('Writing {} to {} tag: {}', beets_field, id3_tag, value)
-                    setattr(mediafile, id3_tag.lower(), value)
+                    self._log.debug('Adding {} to tags with value: {}', id3_tag.lower(), value)
+                    tags[id3_tag.lower()] = value
                 else:
                     self._log.debug('{} field exists but is empty', beets_field)
             else:
-                self._log.debug('No {} field found', beets_field)
-        mediafile.save() 
+                self._log.debug('No {} field found', beets_field) 
